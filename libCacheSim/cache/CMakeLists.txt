@@ -77,6 +77,8 @@ set(eviction_sources_cpp
         eviction/cpp/GDSF.cpp
         eviction/LHD/lhd.cpp
         eviction/LHD/LHD_Interface.cpp
+        eviction/embedding/EmbeddingManager.cpp
+        eviction/SieveEmb.cpp
         )
 
 # LRB
