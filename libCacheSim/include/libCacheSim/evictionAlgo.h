@@ -159,6 +159,15 @@ cache_t *Sieve_init(const common_cache_params_t ccache_params,
 cache_t *SieveEmb_init(const common_cache_params_t ccache_params,
                        const char *cache_specific_params);
 
+cache_t *SieveEmbForgive_init(const common_cache_params_t ccache_params,
+                              const char *cache_specific_params);
+
+cache_t *S3FIFOEmb_init(const common_cache_params_t ccache_params,
+                        const char *cache_specific_params);
+
+cache_t *S3FIFOForgive_init(const common_cache_params_t ccache_params,
+                            const char *cache_specific_params);
+
 cache_t *Size_init(const common_cache_params_t ccache_params,
                    const char *cache_specific_params);
 

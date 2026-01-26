@@ -190,12 +190,13 @@ static bool SieveEmb_get(cache_t *cache, const request_t *req) {
 static cache_obj_t *SieveEmb_find(cache_t *cache, const request_t *req,
                                   const bool update_cache) {
   auto *params = static_cast<SieveEmb_params_t *>(cache->eviction_params);
-  auto *emb = static_cast<embedding::EmbeddingManager *>(params->embedding_manager);
+  auto *emb =
+      static_cast<embedding::EmbeddingManager *>(params->embedding_manager);
 
   cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
   if (cache_obj != NULL && update_cache) {
     cache_obj->sieve.freq = 1;
-    // Update embedding on cache hit
+    // Update embedding on cache hit (also updates recent window internally)
     emb->on_access(req->obj_id);
   }
 
@@ -215,14 +216,10 @@ static cache_obj_t *SieveEmb_find(cache_t *cache, const request_t *req,
  */
 static cache_obj_t *SieveEmb_insert(cache_t *cache, const request_t *req) {
   auto *params = static_cast<SieveEmb_params_t *>(cache->eviction_params);
-  auto *emb = static_cast<embedding::EmbeddingManager *>(params->embedding_manager);
 
   cache_obj_t *obj = cache_insert_base(cache, req);
   prepend_obj_to_head(&params->q_head, &params->q_tail, obj);
   obj->sieve.freq = 0;
-
-  // Track recent accesses after insert
-  emb->update_recent(req->obj_id);
 
   return obj;
 }
@@ -243,79 +240,49 @@ static cache_obj_t *SieveEmb_insert(cache_t *cache, const request_t *req) {
  */
 static cache_obj_t *SieveEmb_to_evict(cache_t *cache, const request_t *req) {
   auto *params = static_cast<SieveEmb_params_t *>(cache->eviction_params);
-  auto *emb = static_cast<embedding::EmbeddingManager *>(params->embedding_manager);
+  auto *emb =
+      static_cast<embedding::EmbeddingManager *>(params->embedding_manager);
 
   cache_obj_t *pointer = params->pointer;
-
-  // If we have run one full around or first eviction
   if (pointer == NULL) {
     pointer = params->q_tail;
   }
 
-  // Collect unvisited candidates
+  // Limited look-ahead window to find candidates (don't modify state)
+  // Window size = 8 * num_candidates to find enough freq=0 objects
+  const int look_ahead_window = params->num_candidates * 8;
+
   std::vector<std::pair<cache_obj_t *, double>> candidates;
   cache_obj_t *scan = pointer;
-  cache_obj_t *start = pointer;
-  bool first_loop = true;
 
-  while (static_cast<int>(candidates.size()) < params->num_candidates) {
-    if (scan == NULL) {
-      break;
-    }
-
-    // Check if unvisited (freq == 0)
+  for (int i = 0; i < look_ahead_window && scan != NULL; i++) {
     if (scan->sieve.freq == 0) {
       double score = emb->max_similarity_to_recent(scan->obj_id);
       candidates.push_back({scan, score});
+      if (static_cast<int>(candidates.size()) >= params->num_candidates) {
+        break;
+      }
     }
 
-    // Move toward tail (prev), wrap to tail if we hit head
     scan = scan->queue.prev;
     if (scan == NULL) {
       scan = params->q_tail;
     }
-
-    // Check if we've completed a full loop
-    if (scan == start && !first_loop) {
+    if (scan == pointer) {
       break;
     }
-    first_loop = false;
   }
 
   if (!candidates.empty()) {
-    // Find candidate with lowest score (least related to recent accesses)
     auto victim_it = std::min_element(
         candidates.begin(), candidates.end(),
         [](const auto &a, const auto &b) { return a.second < b.second; });
     return victim_it->first;
   }
 
-  // Fallback: all items were visited, use baseline SIEVE behavior
-  // Find first object with freq <= to_evict_freq
-  int to_evict_freq = 0;
-  while (true) {
-    pointer = params->pointer == NULL ? params->q_tail : params->pointer;
-    while (pointer != NULL && pointer->sieve.freq > to_evict_freq) {
-      pointer = pointer->queue.prev;
-    }
-
-    if (pointer == NULL) {
-      pointer = params->q_tail;
-      while (pointer != NULL && pointer->sieve.freq > to_evict_freq) {
-        pointer = pointer->queue.prev;
-      }
-    }
-
-    if (pointer != NULL) {
-      return pointer;
-    }
-
-    to_evict_freq++;
-    if (to_evict_freq > 100) {
-      // Safety: should never happen
-      return params->q_tail;
-    }
-  }
+  // Fallback: no candidates in window, just return the hand position
+  // (evict will handle it like standard SIEVE)
+  return pointer;
 }
 
 /**
@@ -329,31 +296,55 @@ static cache_obj_t *SieveEmb_to_evict(cache_t *cache, const request_t *req) {
 static void SieveEmb_evict(cache_t *cache, const request_t *req) {
   auto *params = static_cast<SieveEmb_params_t *>(cache->eviction_params);
 
-  // Get the victim using to_evict
-  cache_obj_t *obj_to_evict = SieveEmb_to_evict(cache, req);
-
-  // Get current hand position
   cache_obj_t *pointer = params->pointer;
   if (pointer == NULL) {
     pointer = params->q_tail;
   }
 
-  // Advance hand from current position to the victim, clearing visited bits
-  cache_obj_t *clear_ptr = pointer;
-  while (clear_ptr != NULL && clear_ptr != obj_to_evict) {
-    clear_ptr->sieve.freq = 0;
-    clear_ptr = clear_ptr->queue.prev;
-    if (clear_ptr == NULL) {
-      clear_ptr = params->q_tail;
-    }
-    if (clear_ptr == pointer) {
-      // Wrapped around without finding victim - shouldn't happen
-      break;
+  cache_obj_t *obj_to_evict = SieveEmb_to_evict(cache, req);
+
+  // If to_evict returned pointer (no candidates found), do standard SIEVE
+  // This means we need to scan from pointer, clearing bits until freq=0
+  if (obj_to_evict == pointer && obj_to_evict->sieve.freq != 0) {
+    cache_obj_t *scan = pointer;
+    int64_t max_scan = cache->n_obj + 1;
+    for (int64_t i = 0; i < max_scan && scan != NULL; i++) {
+      if (scan->sieve.freq == 0) {
+        obj_to_evict = scan;
+        break;
+      }
+      scan->sieve.freq = 0;
+      scan = scan->queue.prev;
+      if (scan == NULL) {
+        scan = params->q_tail;
+      }
+      if (scan == pointer) {
+        obj_to_evict = scan;
+        break;
+      }
     }
   }
 
-  // Move pointer past the victim
-  params->pointer = obj_to_evict->queue.prev;
+  // Only advance hand if we're evicting the object at the hand position
+  if (pointer == obj_to_evict) {
+    cache_obj_t *next_ptr = obj_to_evict->queue.prev;
+    int64_t max_scan = cache->n_obj + 1;
+
+    for (int64_t i = 0; i < max_scan && next_ptr != NULL; i++) {
+      if (next_ptr->sieve.freq == 0) {
+        break;
+      }
+      next_ptr->sieve.freq = 0;
+      next_ptr = next_ptr->queue.prev;
+      if (next_ptr == NULL) {
+        next_ptr = params->q_tail;
+      }
+      if (next_ptr == obj_to_evict) {
+        break;
+      }
+    }
+    params->pointer = next_ptr;
+  }
 
   remove_obj_from_list(&params->q_head, &params->q_tail, obj_to_evict);
   cache_evict_base(cache, obj_to_evict, true);

@@ -31,6 +31,12 @@ class EmbeddingManager {
   // Check if an object has an embedding
   bool has_embedding(uint64_t obj_id) const;
 
+  // Get access count for an object
+  int get_access_count(uint64_t obj_id) const {
+    auto it = access_count_.find(obj_id);
+    return it != access_count_.end() ? it->second : 0;
+  }
+
   // Get/set recent window size
   int get_recent_window() const { return recent_window_; }
   void set_recent_window(int size) { recent_window_ = size; }

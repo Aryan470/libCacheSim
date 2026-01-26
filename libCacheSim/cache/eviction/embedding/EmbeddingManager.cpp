@@ -48,17 +48,25 @@ void EmbeddingManager::update_embedding(uint64_t obj_id) {
 }
 
 void EmbeddingManager::on_access(uint64_t obj_id) {
+  // Always perturb context on every access
+  perturb_context();
+
   int& count = access_count_[obj_id];
   count++;
 
-  if (count == 2) {
-    init_embedding(obj_id);
-  } else if (count > 2) {
+  // If object already has embedding, update it
+  // If object just reached freq 2, give it an embedding
+  // Otherwise just track freq
+  auto it = embeddings_.find(obj_id);
+  if (it != embeddings_.end()) {
     update_embedding(obj_id);
+    // Track in recent window (has valid embedding)
+    update_recent(obj_id);
+  } else if (count == 2) {
+    init_embedding(obj_id);
+    // Track in recent window (just got embedding)
+    update_recent(obj_id);
   }
-
-  // Perturb context after every access
-  perturb_context();
 }
 
 double EmbeddingManager::similarity(uint64_t a, uint64_t b) {
@@ -82,6 +90,7 @@ double EmbeddingManager::similarity(uint64_t a, uint64_t b) {
 
 double EmbeddingManager::max_similarity_to_recent(uint64_t obj_id) {
   auto it = embeddings_.find(obj_id);
+
   double max_sim = -1.0;
 
   for (int i = 0; i < recent_count_; i++) {
@@ -102,6 +111,7 @@ double EmbeddingManager::max_similarity_to_recent(uint64_t obj_id) {
     double sim = sum / K;
     if (sim > max_sim) max_sim = sim;
   }
+
   return max_sim;
 }
 
