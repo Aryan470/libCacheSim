@@ -41,7 +41,7 @@ typedef struct {
 
 static const char *DEFAULT_CACHE_PARAMS =
     "small-size-ratio=0.10,ghost-size-ratio=0.90,move-to-main-threshold=2,"
-    "min-access-count=5,forgive-threshold=0.7,max-forgives=3,recent-window=16";
+    "min-access-count=3,forgive-threshold=0.325,max-forgives=-1,recent-window=16";
 
 // Function declarations
 static void S3FIFOForgive_free(cache_t *cache);
@@ -90,9 +90,9 @@ cache_t *S3FIFOForgive_init(const common_cache_params_t ccache_params,
   params->hit_on_ghost = false;
 
   // Set defaults
-  params->min_access_count = 5;
-  params->forgive_threshold = 0.7;
-  params->max_forgives = 3;
+  params->min_access_count = 3;
+  params->forgive_threshold = 0.325;
+  params->max_forgives = -1;  // -1 means unlimited
   params->recent_window = 16;
 
   S3FIFOForgive_parse_params(cache, DEFAULT_CACHE_PARAMS);
@@ -296,7 +296,8 @@ static void S3FIFOForgive_evict_main(cache_t *cache, const request_t *req) {
       // Check if we should forgive based on embedding similarity
       bool should_forgive = false;
 
-      if (forgives_remaining > 0) {
+      // forgives_remaining < 0 means unlimited forgives
+      if (forgives_remaining > 0 || forgives_remaining < 0) {
         g_access_count_checked++;
         int access_count = emb->get_access_count(obj_to_evict->obj_id);
 
@@ -322,7 +323,7 @@ static void S3FIFOForgive_evict_main(cache_t *cache, const request_t *req) {
 
           if (similarity >= params->forgive_threshold) {
             should_forgive = true;
-            forgives_remaining--;
+            if (forgives_remaining > 0) forgives_remaining--;  // Don't decrement if unlimited (-1)
             g_forgives++;
           }
         }

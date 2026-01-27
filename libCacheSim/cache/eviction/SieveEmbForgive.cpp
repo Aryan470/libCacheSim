@@ -26,7 +26,7 @@ typedef struct {
 
 // Default parameters
 static const int DEFAULT_RECENT_WINDOW = 16;
-static const double DEFAULT_FORGIVE_THRESHOLD = 0.5;
+static const double DEFAULT_FORGIVE_THRESHOLD = 0.325;
 
 // ***********************************************************************
 // ****                                                               ****

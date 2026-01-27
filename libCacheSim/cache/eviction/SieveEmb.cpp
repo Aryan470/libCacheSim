@@ -24,7 +24,7 @@ typedef struct {
 } SieveEmb_params_t;
 
 // Default parameters
-static const int DEFAULT_NUM_CANDIDATES = 8;
+static const int DEFAULT_NUM_CANDIDATES = 4;
 static const int DEFAULT_RECENT_WINDOW = 16;
 
 // ***********************************************************************
@@ -167,6 +167,12 @@ static void SieveEmb_free(cache_t *cache) {
  * @brief this function is the user facing API
  */
 static bool SieveEmb_get(cache_t *cache, const request_t *req) {
+  auto *params = static_cast<SieveEmb_params_t *>(cache->eviction_params);
+  auto *emb = static_cast<embedding::EmbeddingManager *>(params->embedding_manager);
+
+  // Update embedding on EVERY access (hit or miss)
+  emb->on_access(req->obj_id);
+
   bool ck_hit = cache_get_base(cache, req);
   return ck_hit;
 }
@@ -189,15 +195,9 @@ static bool SieveEmb_get(cache_t *cache, const request_t *req) {
  */
 static cache_obj_t *SieveEmb_find(cache_t *cache, const request_t *req,
                                   const bool update_cache) {
-  auto *params = static_cast<SieveEmb_params_t *>(cache->eviction_params);
-  auto *emb =
-      static_cast<embedding::EmbeddingManager *>(params->embedding_manager);
-
   cache_obj_t *cache_obj = cache_find_base(cache, req, update_cache);
   if (cache_obj != NULL && update_cache) {
     cache_obj->sieve.freq = 1;
-    // Update embedding on cache hit (also updates recent window internally)
-    emb->on_access(req->obj_id);
   }
 
   return cache_obj;
@@ -287,63 +287,70 @@ static cache_obj_t *SieveEmb_to_evict(cache_t *cache, const request_t *req) {
 
 /**
  * @brief evict an object from the cache
- * it needs to call cache_evict_base before returning
- * which updates some metadata such as n_obj, occupied size, and hash table
+ *
+ * Modified logic: collect 4 candidates, pick the one with lowest similarity,
+ * then advance the hand PAST all 4 candidates (giving the others more time).
  *
  * @param cache
  * @param req not used
  */
 static void SieveEmb_evict(cache_t *cache, const request_t *req) {
   auto *params = static_cast<SieveEmb_params_t *>(cache->eviction_params);
+  auto *emb = static_cast<embedding::EmbeddingManager *>(params->embedding_manager);
 
   cache_obj_t *pointer = params->pointer;
   if (pointer == NULL) {
     pointer = params->q_tail;
   }
 
-  cache_obj_t *obj_to_evict = SieveEmb_to_evict(cache, req);
+  // Collect candidates and track where we scanned to
+  std::vector<std::pair<cache_obj_t *, double>> candidates;
+  cache_obj_t *scan = pointer;
+  cache_obj_t *last_scanned = pointer;  // Track furthest point scanned
+  const int look_ahead_window = params->num_candidates * 8;
 
-  // If to_evict returned pointer (no candidates found), do standard SIEVE
-  // This means we need to scan from pointer, clearing bits until freq=0
-  if (obj_to_evict == pointer && obj_to_evict->sieve.freq != 0) {
-    cache_obj_t *scan = pointer;
-    int64_t max_scan = cache->n_obj + 1;
-    for (int64_t i = 0; i < max_scan && scan != NULL; i++) {
-      if (scan->sieve.freq == 0) {
-        obj_to_evict = scan;
-        break;
-      }
+  for (int i = 0; i < look_ahead_window && scan != NULL; i++) {
+    // Clear freq bit as we scan (like standard SIEVE)
+    if (scan->sieve.freq > 0) {
       scan->sieve.freq = 0;
-      scan = scan->queue.prev;
-      if (scan == NULL) {
-        scan = params->q_tail;
-      }
-      if (scan == pointer) {
-        obj_to_evict = scan;
+    } else {
+      // freq == 0: this is a candidate
+      double score = emb->max_similarity_to_recent(scan->obj_id);
+      candidates.push_back({scan, score});
+      if (static_cast<int>(candidates.size()) >= params->num_candidates) {
+        last_scanned = scan;
         break;
       }
+    }
+
+    last_scanned = scan;
+    scan = scan->queue.prev;
+    if (scan == NULL) {
+      scan = params->q_tail;
+    }
+    if (scan == pointer) {
+      break;
     }
   }
 
-  // Only advance hand if we're evicting the object at the hand position
-  if (pointer == obj_to_evict) {
-    cache_obj_t *next_ptr = obj_to_evict->queue.prev;
-    int64_t max_scan = cache->n_obj + 1;
+  cache_obj_t *obj_to_evict = NULL;
 
-    for (int64_t i = 0; i < max_scan && next_ptr != NULL; i++) {
-      if (next_ptr->sieve.freq == 0) {
-        break;
-      }
-      next_ptr->sieve.freq = 0;
-      next_ptr = next_ptr->queue.prev;
-      if (next_ptr == NULL) {
-        next_ptr = params->q_tail;
-      }
-      if (next_ptr == obj_to_evict) {
-        break;
-      }
-    }
-    params->pointer = next_ptr;
+  if (!candidates.empty()) {
+    // Pick candidate with lowest similarity (coldest)
+    auto victim_it = std::min_element(
+        candidates.begin(), candidates.end(),
+        [](const auto &a, const auto &b) { return a.second < b.second; });
+    obj_to_evict = victim_it->first;
+  } else {
+    // Fallback: evict at pointer
+    obj_to_evict = pointer;
+  }
+
+  // Advance hand PAST all candidates (to last_scanned position)
+  // This gives the non-evicted candidates more time before reconsideration
+  params->pointer = last_scanned->queue.prev;
+  if (params->pointer == NULL) {
+    params->pointer = params->q_tail;
   }
 
   remove_obj_from_list(&params->q_head, &params->q_tail, obj_to_evict);
