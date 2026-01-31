@@ -83,6 +83,12 @@ set(eviction_sources_cpp
         eviction/S3FIFOEmb.cpp
         eviction/S3FIFOForgive.cpp
         eviction/LRUForgive.cpp
+        eviction/LRUForgiveClean.cpp
+        eviction/LRUBottomK.cpp
+        eviction/SieveBottomK.cpp
+        eviction/LRUEmbDiag.cpp
+        eviction/S3FIFOForgiveClean.cpp
+        eviction/S3FIFOForgiveOnlyEvict.cpp
         )
 
 # LRB

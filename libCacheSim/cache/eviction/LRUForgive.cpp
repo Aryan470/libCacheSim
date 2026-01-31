@@ -33,6 +33,20 @@ static int64_t forgiven_with_zero_hits = 0;
 static int64_t sim_bucket_forgiven[10] = {0};
 static int64_t sim_bucket_evicted[10] = {0};
 
+// Regret tracking: did we evict something that was accessed soon after?
+static constexpr int REGRET_BUFFER_SIZE = 10000;
+struct EvictionRecord {
+  uint64_t evicted_obj_id;
+  uint64_t triggering_access_obj_id;  // the object being accessed when eviction happened
+};
+static EvictionRecord regret_buffer[REGRET_BUFFER_SIZE];
+static int regret_buffer_idx = 0;
+static int regret_buffer_count = 0;
+static std::unordered_map<uint64_t, uint64_t> recent_evictions;  // evicted_obj -> triggering_obj
+static int64_t n_total_misses = 0;
+static int64_t n_regret_misses = 0;  // missed an object we recently evicted
+static int64_t n_sequential_regret = 0;  // regret miss where evicted was sequential to trigger
+
 typedef struct {
   cache_obj_t *q_head;           // MRU end
   cache_obj_t *q_tail;           // LRU end (eviction candidate)
@@ -44,6 +58,7 @@ typedef struct {
   double random_forgive_prob;    // if > 0, use random instead of embedding
   double lr;                     // embedding learning rate
   double ctx_speed;              // context perturbation speed
+  bool use_max_sim;              // if true, use max similarity; else avg_top_k
   int64_t n_forgive;             // stats
   int64_t n_evict;               // stats
   int64_t n_candidates;          // stats: total eviction candidates considered
@@ -113,6 +128,7 @@ cache_t *LRUForgive_init(const common_cache_params_t ccache_params,
   params->random_forgive_prob = 0.0;  // 0 means use embeddings
   params->lr = 0.2;
   params->ctx_speed = 0.1;
+  params->use_max_sim = false;  // default: use avg_top_k
 
   LRUForgive_parse_params(cache, DEFAULT_CACHE_PARAMS);
   if (cache_specific_params != NULL) {
@@ -161,6 +177,14 @@ static void LRUForgive_free(cache_t *cache) {
             i * 0.1, (i + 1) * 0.1, sim_bucket_forgiven[i], sim_bucket_evicted[i]);
   }
 
+  // Print regret stats
+  fprintf(stderr, "\n[Regret Analysis] Evicted objects accessed within next %d requests:\n", REGRET_BUFFER_SIZE);
+  fprintf(stderr, "  Total misses: %ld\n", n_total_misses);
+  fprintf(stderr, "  Regret misses (recently evicted): %ld (%.2f%% of misses)\n",
+          n_regret_misses, n_total_misses > 0 ? 100.0 * n_regret_misses / n_total_misses : 0.0);
+  fprintf(stderr, "  Sequential regret (sim > 0.2): %ld (%.2f%% of regret)\n",
+          n_sequential_regret, n_regret_misses > 0 ? 100.0 * n_sequential_regret / n_regret_misses : 0.0);
+
   // Reset static vars for next run
   forgiven_objects.clear();
   hits_after_forgive.clear();
@@ -171,6 +195,13 @@ static void LRUForgive_free(cache_t *cache) {
     sim_bucket_forgiven[i] = 0;
     sim_bucket_evicted[i] = 0;
   }
+  // Reset regret tracking
+  recent_evictions.clear();
+  regret_buffer_idx = 0;
+  regret_buffer_count = 0;
+  n_total_misses = 0;
+  n_regret_misses = 0;
+  n_sequential_regret = 0;
 
   delete emb;
   free(cache->eviction_params);
@@ -187,6 +218,24 @@ static bool LRUForgive_get(cache_t *cache, const request_t *req) {
 
   // Track access for embeddings on EVERY request
   emb->on_access(req->obj_id);
+
+  // Check if this is a miss on a recently evicted object (regret tracking)
+  cache_obj_t *obj = cache_find_base(cache, req, false);
+  if (obj == NULL) {
+    // This is a miss
+    n_total_misses++;
+    auto it = recent_evictions.find(req->obj_id);
+    if (it != recent_evictions.end()) {
+      // We recently evicted this object - regret!
+      n_regret_misses++;
+      // Check if the evicted object was sequential to the triggering access
+      // Use embedding similarity as proxy for sequential relationship
+      double sim = emb->similarity_public(req->obj_id, it->second);
+      if (sim > 0.2) {  // threshold for "sequential-like" relationship
+        n_sequential_regret++;
+      }
+    }
+  }
 
   return cache_get_base(cache, req);
 }
@@ -261,8 +310,12 @@ static void LRUForgive_evict(cache_t *cache, const request_t *req) {
           double r = (double)rand() / RAND_MAX;
           passes_check = (r < params->random_forgive_prob);
         } else {
-          // Embedding-based forgiveness (avg of top 3 similarities)
-          similarity = emb->avg_top_k_similarity_to_recent(obj->obj_id, 3);
+          // Embedding-based forgiveness
+          if (params->use_max_sim) {
+            similarity = emb->max_similarity_to_recent(obj->obj_id);
+          } else {
+            similarity = emb->avg_top_k_similarity_to_recent(obj->obj_id, 3);
+          }
           passes_check = (similarity >= params->forgive_threshold);
 
           // Track similarity distribution
@@ -303,6 +356,17 @@ static void LRUForgive_evict(cache_t *cache, const request_t *req) {
         forgiven_objects.erase(obj->obj_id);
         hits_after_forgive.erase(obj->obj_id);
       }
+
+      // Record eviction for regret tracking
+      // Remove old entry from map if buffer is full
+      if (regret_buffer_count == REGRET_BUFFER_SIZE) {
+        recent_evictions.erase(regret_buffer[regret_buffer_idx].evicted_obj_id);
+      }
+      // Add new entry
+      regret_buffer[regret_buffer_idx] = {obj->obj_id, req->obj_id};
+      recent_evictions[obj->obj_id] = req->obj_id;
+      regret_buffer_idx = (regret_buffer_idx + 1) % REGRET_BUFFER_SIZE;
+      if (regret_buffer_count < REGRET_BUFFER_SIZE) regret_buffer_count++;
 
       params->q_tail = params->q_tail->queue.prev;
       if (likely(params->q_tail != NULL)) {
@@ -390,6 +454,8 @@ static void LRUForgive_parse_params(cache_t *cache,
       params->lr = strtod(value, NULL);
     } else if (strcasecmp(key, "ctx-speed") == 0) {
       params->ctx_speed = strtod(value, NULL);
+    } else if (strcasecmp(key, "use-max-sim") == 0) {
+      params->use_max_sim = (atoi(value) != 0);
     } else if (strcasecmp(key, "print") == 0) {
       printf("LRUForgive: min-access-count=%d, "
              "forgive-threshold=%.2lf, max-forgives=%d, recent-window=%d\n",

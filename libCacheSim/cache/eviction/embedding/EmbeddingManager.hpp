@@ -25,8 +25,14 @@ class EmbeddingManager {
   // Compute maximum similarity between obj and any object in the recent window
   double max_similarity_to_recent(uint64_t obj_id);
 
+  // Compute similarity between two specific objects (public for diagnostics)
+  double similarity_public(uint64_t a, uint64_t b) { return similarity(a, b); }
+
   // Compute average of top-k similarities to recent objects
   double avg_top_k_similarity_to_recent(uint64_t obj_id, int k);
+
+  // Compute average similarity to ALL recent objects
+  double avg_similarity_to_recent(uint64_t obj_id);
 
   // Track recent accesses (call after insert)
   void update_recent(uint64_t obj_id);
@@ -55,11 +61,18 @@ class EmbeddingManager {
   // Memory usage estimate
   size_t memory_bytes() const;
 
+  // Get embedding for an object (returns nullptr if not found)
+  const std::array<std::array<double, D>, K>* get_embedding(uint64_t obj_id) const {
+    auto it = embeddings_.find(obj_id);
+    return it != embeddings_.end() ? &it->second : nullptr;
+  }
+
  private:
   using EmbeddingArray = std::array<std::array<double, D>, K>;
 
   void init_context();
   void perturb_context();
+  void perturb_context_10x();
   void init_embedding(uint64_t obj_id);
   void update_embedding(uint64_t obj_id);
   double similarity(uint64_t a, uint64_t b);
@@ -83,6 +96,7 @@ class EmbeddingManager {
   int recent_idx_ = 0;  // circular buffer index
   int recent_count_ = 0;
   int recent_window_ = 16;
+  int perturb_counter_ = 0;  // for batched perturbation
   double lr_ = DEFAULT_LR;
   double ctx_speed_ = DEFAULT_CTX_SPEED;
 
