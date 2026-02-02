@@ -294,7 +294,7 @@ typedef struct {
 
 static const char *DEFAULT_CACHE_PARAMS =
     "small-size-ratio=0.10,ghost-size-ratio=0.90,move-to-main-threshold=2,"
-    "lr=0.2,ctx-speed=0.001,threshold=0.5,window=16,min-access=2,max-forgives=5,max-emb-entries=-1";
+    "lr=0.2,ctx-speed=0.001,threshold=0.4,window=16,min-access=2,max-forgives=5,max-emb-entries=-1";
 
 // Function declarations
 static void S3FIFOForgiveEmbCache_free(cache_t *cache);
@@ -630,6 +630,24 @@ static inline bool S3FIFOForgiveEmbCache_can_insert(cache_t *cache, const reques
 // ============================================================================
 // Parameter Parsing
 // ============================================================================
+// Helper to parse max-emb-entries which can be a number, -1 (unlimited), or Nx (multiplier of cache size)
+static int64_t parse_max_emb_entries(const char *value, int64_t cache_size) {
+  if (value == NULL) return -1;
+  size_t len = strlen(value);
+  if (len == 0) return -1;
+
+  // Check for Nx format (e.g., "2x", "0.5x")
+  if (value[len - 1] == 'x' || value[len - 1] == 'X') {
+    double multiplier = strtod(value, NULL);
+    // Estimate number of objects: cache_size / average_object_size
+    // Using 1KB as rough average object size estimate
+    int64_t estimated_objects = cache_size / 1024;
+    return static_cast<int64_t>(multiplier * estimated_objects);
+  }
+
+  return strtoll(value, NULL, 10);
+}
+
 static void S3FIFOForgiveEmbCache_parse_params(cache_t *cache, const char *cache_specific_params) {
   auto *params = static_cast<S3FIFOForgiveEmbCache_params_t *>(cache->eviction_params);
 
@@ -661,7 +679,7 @@ static void S3FIFOForgiveEmbCache_parse_params(cache_t *cache, const char *cache
     } else if (strcasecmp(key, "max-forgives") == 0) {
       params->emb_max_forgives = atoi(value);
     } else if (strcasecmp(key, "max-emb-entries") == 0) {
-      params->emb_max_entries = strtoll(value, NULL, 10);
+      params->emb_max_entries = parse_max_emb_entries(value, cache->cache_size);
     } else if (strcasecmp(key, "print") == 0) {
       printf("lr=%.2f,ctx-speed=%.4f,threshold=%.2f,window=%d,min-access=%d,max-forgives=%d,max-emb-entries=%ld\n",
              params->emb_lr, params->emb_ctx_speed, params->emb_threshold,

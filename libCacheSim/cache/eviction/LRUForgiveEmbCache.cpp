@@ -268,7 +268,7 @@ typedef struct {
 } LRUForgiveEmbCache_params_t;
 
 static const char *DEFAULT_CACHE_PARAMS =
-    "min-access-count=3,forgive-threshold=0.325,max-forgives=5,recent-window=16,"
+    "min-access=2,threshold=0.4,max-forgives=5,window=16,"
     "lr=0.2,ctx-speed=0.001,max-emb-entries=-1";
 
 // Function declarations
@@ -459,6 +459,24 @@ static bool LRUForgiveEmbCache_remove(cache_t *cache, const obj_id_t obj_id) {
 // ============================================================================
 // Parameter Parsing
 // ============================================================================
+// Helper to parse max-emb-entries which can be a number, -1 (unlimited), or Nx (multiplier of cache size)
+static int64_t parse_max_emb_entries(const char *value, int64_t cache_size) {
+  if (value == NULL) return -1;
+  size_t len = strlen(value);
+  if (len == 0) return -1;
+
+  // Check for Nx format (e.g., "2x", "0.5x")
+  if (value[len - 1] == 'x' || value[len - 1] == 'X') {
+    double multiplier = strtod(value, NULL);
+    // Estimate number of objects: cache_size / average_object_size
+    // Using 1KB as rough average object size estimate
+    int64_t estimated_objects = cache_size / 1024;
+    return static_cast<int64_t>(multiplier * estimated_objects);
+  }
+
+  return strtoll(value, NULL, 10);
+}
+
 static void LRUForgiveEmbCache_parse_params(cache_t *cache, const char *cache_specific_params) {
   auto *params = static_cast<LRUForgiveEmbCache_params_t *>(cache->eviction_params);
 
@@ -471,22 +489,22 @@ static void LRUForgiveEmbCache_parse_params(cache_t *cache, const char *cache_sp
 
     while (params_str != NULL && *params_str == ' ') params_str++;
 
-    if (strcasecmp(key, "min-access-count") == 0) {
+    if (strcasecmp(key, "min-access") == 0 || strcasecmp(key, "min-access-count") == 0) {
       params->min_access_count = atoi(value);
-    } else if (strcasecmp(key, "forgive-threshold") == 0 || strcasecmp(key, "threshold") == 0 || strcasecmp(key, "th") == 0) {
+    } else if (strcasecmp(key, "threshold") == 0 || strcasecmp(key, "th") == 0 || strcasecmp(key, "forgive-threshold") == 0) {
       params->forgive_threshold = strtod(value, NULL);
     } else if (strcasecmp(key, "max-forgives") == 0) {
       params->max_forgives = atoi(value);
-    } else if (strcasecmp(key, "recent-window") == 0 || strcasecmp(key, "window") == 0) {
+    } else if (strcasecmp(key, "window") == 0 || strcasecmp(key, "recent-window") == 0) {
       params->recent_window = atoi(value);
     } else if (strcasecmp(key, "lr") == 0) {
       params->lr = strtod(value, NULL);
     } else if (strcasecmp(key, "ctx-speed") == 0) {
       params->ctx_speed = strtod(value, NULL);
     } else if (strcasecmp(key, "max-emb-entries") == 0) {
-      params->max_emb_entries = strtoll(value, NULL, 10);
+      params->max_emb_entries = parse_max_emb_entries(value, cache->cache_size);
     } else if (strcasecmp(key, "print") == 0) {
-      printf("min-access-count=%d,forgive-threshold=%.2f,max-forgives=%d,recent-window=%d,"
+      printf("min-access=%d,threshold=%.2f,max-forgives=%d,window=%d,"
              "lr=%.2f,ctx-speed=%.4f,max-emb-entries=%ld\n",
              params->min_access_count, params->forgive_threshold, params->max_forgives,
              params->recent_window, params->lr, params->ctx_speed, params->max_emb_entries);

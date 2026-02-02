@@ -292,6 +292,24 @@ static bool LRUFreq_remove(cache_t *cache, const obj_id_t obj_id) {
 // ============================================================================
 // Parameter Parsing
 // ============================================================================
+// Helper to parse max-freq-entries which can be a number, -1 (unlimited), or Nx (multiplier of cache size)
+static int64_t parse_max_freq_entries(const char *value, int64_t cache_size) {
+  if (value == NULL) return -1;
+  size_t len = strlen(value);
+  if (len == 0) return -1;
+
+  // Check for Nx format (e.g., "2x", "0.5x")
+  if (value[len - 1] == 'x' || value[len - 1] == 'X') {
+    double multiplier = strtod(value, NULL);
+    // Estimate number of objects: cache_size / average_object_size
+    // Using 1KB as rough average object size estimate
+    int64_t estimated_objects = cache_size / 1024;
+    return static_cast<int64_t>(multiplier * estimated_objects);
+  }
+
+  return strtoll(value, NULL, 10);
+}
+
 static void LRUFreq_parse_params(cache_t *cache, const char *cache_specific_params) {
   auto *params = static_cast<LRUFreq_params_t *>(cache->eviction_params);
 
@@ -309,7 +327,7 @@ static void LRUFreq_parse_params(cache_t *cache, const char *cache_specific_para
     } else if (strcasecmp(key, "max-forgives") == 0) {
       params->max_forgives = atoi(value);
     } else if (strcasecmp(key, "max-freq-entries") == 0) {
-      params->max_freq_entries = strtoll(value, NULL, 10);
+      params->max_freq_entries = parse_max_freq_entries(value, cache->cache_size);
     } else if (strcasecmp(key, "print") == 0) {
       printf("min-freq=%d,max-forgives=%d,max-freq-entries=%ld\n",
              params->min_freq, params->max_forgives, params->max_freq_entries);
