@@ -174,6 +174,12 @@ cache_t *LRUForgive_init(const common_cache_params_t ccache_params,
 cache_t *LRUForgiveClean_init(const common_cache_params_t ccache_params,
                               const char *cache_specific_params);
 
+cache_t *LRUForgiveEmbCache_init(const common_cache_params_t ccache_params,
+                                  const char *cache_specific_params);
+
+cache_t *LRUFreq_init(const common_cache_params_t ccache_params,
+                       const char *cache_specific_params);
+
 cache_t *LRUBottomK_init(const common_cache_params_t ccache_params,
                          const char *cache_specific_params);
 
@@ -188,6 +194,9 @@ cache_t *S3FIFOForgiveClean_init(const common_cache_params_t ccache_params,
 
 cache_t *S3FIFOForgiveOnlyEvict_init(const common_cache_params_t ccache_params,
                                       const char *cache_specific_params);
+
+cache_t *S3FIFOForgiveEmbCache_init(const common_cache_params_t ccache_params,
+                                     const char *cache_specific_params);
 
 cache_t *Size_init(const common_cache_params_t ccache_params,
                    const char *cache_specific_params);
