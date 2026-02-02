@@ -35,7 +35,7 @@ def run_cachesim(
         cmd.extend(["-n", str(max_requests)])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
         output = result.stdout + result.stderr
         match = re.search(r'miss ratio\s+([0-9.]+)', output)
         if match:
