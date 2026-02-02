@@ -83,7 +83,7 @@ def evaluate_params(
     Evaluate parameters across all traces.
     Returns (avg_improvement_pct, per_trace_results).
     """
-    eviction_params = f"lr={lr},ctx-speed={ctx_speed:.2e},threshold={threshold},emb-budget-ratio={emb_budget}"
+    eviction_params = f"lr={lr},ctx-speed={ctx_speed:.2e},threshold={threshold},max-emb-entries={int(emb_budget)}x"
 
     args_list = [
         (cachesim_path, tp, cache_size_ratio, eviction_params, max_requests)
