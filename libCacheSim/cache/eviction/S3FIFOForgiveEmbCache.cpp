@@ -639,10 +639,7 @@ static int64_t parse_max_emb_entries(const char *value, int64_t cache_size) {
   // Check for Nx format (e.g., "2x", "0.5x")
   if (value[len - 1] == 'x' || value[len - 1] == 'X') {
     double multiplier = strtod(value, NULL);
-    // Estimate number of objects: cache_size / average_object_size
-    // Using 1KB as rough average object size estimate
-    int64_t estimated_objects = cache_size / 1024;
-    return static_cast<int64_t>(multiplier * estimated_objects);
+    return static_cast<int64_t>(multiplier * cache_size);
   }
 
   return strtoll(value, NULL, 10);
