@@ -107,7 +107,7 @@ typedef struct {
   int64_t n_candidates;
 } LRUFreq_params_t;
 
-static const char *DEFAULT_CACHE_PARAMS = "min-freq=3,max-forgives=5,max-freq-entries=100000";
+static const char *DEFAULT_CACHE_PARAMS = "min-freq=3,max-forgives=5,max-freq-entries=-1";
 
 // Function declarations
 static void LRUFreq_free(cache_t *cache);

@@ -269,7 +269,7 @@ typedef struct {
 
 static const char *DEFAULT_CACHE_PARAMS =
     "min-access-count=3,forgive-threshold=0.325,max-forgives=5,recent-window=16,"
-    "lr=0.2,ctx-speed=0.001,max-emb-entries=100000";
+    "lr=0.2,ctx-speed=0.001,max-emb-entries=-1";
 
 // Function declarations
 static void LRUForgiveEmbCache_free(cache_t *cache);

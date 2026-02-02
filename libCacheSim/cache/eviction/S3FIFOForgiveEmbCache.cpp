@@ -294,7 +294,7 @@ typedef struct {
 
 static const char *DEFAULT_CACHE_PARAMS =
     "small-size-ratio=0.10,ghost-size-ratio=0.90,move-to-main-threshold=2,"
-    "lr=0.2,ctx-speed=0.001,threshold=0.5,window=16,min-access=2,max-forgives=5,max-emb-entries=100000";
+    "lr=0.2,ctx-speed=0.001,threshold=0.5,window=16,min-access=2,max-forgives=5,max-emb-entries=-1";
 
 // Function declarations
 static void S3FIFOForgiveEmbCache_free(cache_t *cache);
