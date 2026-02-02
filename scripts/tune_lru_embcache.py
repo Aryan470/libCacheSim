@@ -61,7 +61,7 @@ def run_single_trace(args: Tuple) -> Tuple[str, float, float]:
 
     # Run LRUForgiveEmbCache with params
     test_mr = run_cachesim(
-        cachesim_path, trace_path, "lruforgive-embcache", cache_size_ratio,
+        cachesim_path, trace_path, "LRUForgiveEmbCache", cache_size_ratio,
         eviction_params=eviction_params, max_requests=max_requests
     )
 
