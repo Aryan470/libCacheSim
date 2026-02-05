@@ -13,7 +13,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
-def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_params="", max_requests=None):
+def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_params="", max_requests=None, timeout=1800):
     """Run cachesim and return miss ratio."""
     cmd = [
         cachesim_path, trace_path, "oracleGeneral", algo, str(cache_size_ratio),
@@ -25,7 +25,7 @@ def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_par
         cmd.extend(["-n", str(max_requests)])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         output = result.stdout + result.stderr
         match = re.search(r'miss ratio\s+([0-9.]+)', output)
         if match:
@@ -39,15 +39,15 @@ def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_par
 
 def evaluate_trace(args):
     """Evaluate a single trace with both algorithms."""
-    cachesim_path, trace_path, cache_size_ratio, lr, ctx_speed, threshold, emb_budget, max_requests = args
+    cachesim_path, trace_path, cache_size_ratio, lr, ctx_speed, threshold, emb_budget, max_requests, timeout = args
     trace_name = Path(trace_path).name
 
     # Run LRU baseline
-    baseline_mr = run_cachesim(cachesim_path, trace_path, "lru", cache_size_ratio, max_requests=max_requests)
+    baseline_mr = run_cachesim(cachesim_path, trace_path, "lru", cache_size_ratio, max_requests=max_requests, timeout=timeout)
 
     # Run LRUForgiveEmbCache with optimal params
     eviction_params = f"lr={lr},ctx-speed={ctx_speed},threshold={threshold},max-emb-entries={int(emb_budget)}x"
-    test_mr = run_cachesim(cachesim_path, trace_path, "LRUForgiveEmbCache", cache_size_ratio, eviction_params, max_requests=max_requests)
+    test_mr = run_cachesim(cachesim_path, trace_path, "LRUForgiveEmbCache", cache_size_ratio, eviction_params, max_requests=max_requests, timeout=timeout)
 
     return {
         'trace': trace_name,
@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--threshold", type=float, required=True)
     parser.add_argument("--emb-budget", type=float, default=5.0)
     parser.add_argument("--max-requests", type=int, default=None)
+    parser.add_argument("--timeout", type=int, default=1800, help="Timeout per cachesim run in seconds (default: 1800)")
     parser.add_argument("--output", type=str, required=True, help="Output CSV file")
     parser.add_argument("--n-workers", type=int, default=10)
     parser.add_argument("--workload", type=str, required=True, help="Workload name for CSV")
@@ -89,11 +90,12 @@ def main():
     print(f"Embedding budget: {args.emb_budget}x")
     if args.max_requests:
         print(f"Max requests: {args.max_requests}")
+    print(f"Timeout: {args.timeout}s")
     print("-" * 60)
 
     # Build args list
     args_list = [
-        (args.cachesim, tp, args.cache_size_ratio, args.lr, args.ctx_speed, args.threshold, args.emb_budget, args.max_requests)
+        (args.cachesim, tp, args.cache_size_ratio, args.lr, args.ctx_speed, args.threshold, args.emb_budget, args.max_requests, args.timeout)
         for tp in trace_paths
     ]
 

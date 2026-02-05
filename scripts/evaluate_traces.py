@@ -13,7 +13,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
-def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_params=""):
+def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_params="", timeout=1800):
     """Run cachesim and return miss ratio."""
     cmd = [
         cachesim_path, trace_path, "oracleGeneral", algo, str(cache_size_ratio),
@@ -23,7 +23,7 @@ def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_par
         cmd.extend(["--eviction-params", eviction_params])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         output = result.stdout + result.stderr
         match = re.search(r'miss ratio\s+([0-9.]+)', output)
         if match:
@@ -37,15 +37,15 @@ def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_par
 
 def evaluate_trace(args):
     """Evaluate a single trace with both algorithms."""
-    cachesim_path, trace_path, cache_size_ratio, lr, ctx_speed, threshold, emb_budget = args
+    cachesim_path, trace_path, cache_size_ratio, lr, ctx_speed, threshold, emb_budget, timeout = args
     trace_name = Path(trace_path).name
 
     # Run S3FIFO baseline
-    baseline_mr = run_cachesim(cachesim_path, trace_path, "s3fifo", cache_size_ratio)
+    baseline_mr = run_cachesim(cachesim_path, trace_path, "s3fifo", cache_size_ratio, timeout=timeout)
 
     # Run S3FIFOForgiveEmbCache with optimal params
     eviction_params = f"lr={lr},ctx-speed={ctx_speed},threshold={threshold},max-emb-entries={int(emb_budget)}x"
-    test_mr = run_cachesim(cachesim_path, trace_path, "s3fifoforgive-embcache", cache_size_ratio, eviction_params)
+    test_mr = run_cachesim(cachesim_path, trace_path, "s3fifoforgive-embcache", cache_size_ratio, eviction_params, timeout=timeout)
 
     return {
         'trace': trace_name,
@@ -63,6 +63,7 @@ def main():
     parser.add_argument("--ctx-speed", type=float, required=True)
     parser.add_argument("--threshold", type=float, required=True)
     parser.add_argument("--emb-budget", type=float, default=5.0)
+    parser.add_argument("--timeout", type=int, default=1800, help="Timeout per cachesim run in seconds (default: 1800)")
     parser.add_argument("--output", type=str, required=True, help="Output CSV file")
     parser.add_argument("--n-workers", type=int, default=10)
     parser.add_argument("--workload", type=str, required=True, help="Workload name for CSV")
@@ -84,11 +85,12 @@ def main():
     print(f"Evaluating {len(trace_paths)} traces for {args.workload}")
     print(f"Optimal params: lr={args.lr}, ctx-speed={args.ctx_speed}, threshold={args.threshold}")
     print(f"Embedding budget: {args.emb_budget}x")
+    print(f"Timeout: {args.timeout}s")
     print("-" * 60)
 
     # Build args list
     args_list = [
-        (args.cachesim, tp, args.cache_size_ratio, args.lr, args.ctx_speed, args.threshold, args.emb_budget)
+        (args.cachesim, tp, args.cache_size_ratio, args.lr, args.ctx_speed, args.threshold, args.emb_budget, args.timeout)
         for tp in trace_paths
     ]
 
