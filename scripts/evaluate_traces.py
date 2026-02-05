@@ -10,7 +10,7 @@ import argparse
 import csv
 import sys
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 
 def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_params="", timeout=1800):
@@ -36,16 +36,17 @@ def run_cachesim(cachesim_path, trace_path, algo, cache_size_ratio, eviction_par
 
 
 def evaluate_trace(args):
-    """Evaluate a single trace with both algorithms."""
+    """Evaluate a single trace with both algorithms in parallel."""
     cachesim_path, trace_path, cache_size_ratio, lr, ctx_speed, threshold, emb_budget, timeout = args
     trace_name = Path(trace_path).name
-
-    # Run S3FIFO baseline
-    baseline_mr = run_cachesim(cachesim_path, trace_path, "s3fifo", cache_size_ratio, timeout=timeout)
-
-    # Run S3FIFOForgiveEmbCache with optimal params
     eviction_params = f"lr={lr},ctx-speed={ctx_speed},threshold={threshold},max-emb-entries={int(emb_budget)}x"
-    test_mr = run_cachesim(cachesim_path, trace_path, "s3fifoforgive-embcache", cache_size_ratio, eviction_params, timeout=timeout)
+
+    # Run S3FIFO baseline and S3FIFOForgiveEmbCache in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        baseline_future = executor.submit(run_cachesim, cachesim_path, trace_path, "s3fifo", cache_size_ratio, "", timeout)
+        test_future = executor.submit(run_cachesim, cachesim_path, trace_path, "s3fifoforgive-embcache", cache_size_ratio, eviction_params, timeout)
+        baseline_mr = baseline_future.result()
+        test_mr = test_future.result()
 
     return {
         'trace': trace_name,
